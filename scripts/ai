@@ -1,0 +1,143 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+usage() {
+  cat <<'USAGE'
+Usage:
+  ai <target> [--force] [-y]
+  ai attach <target> [--force] [-y]
+
+Options:
+  --force, -f   Replace existing AGENTS.md or .claude/skills
+  -y            Skip confirmation prompt
+  -h, --help    Show help
+USAGE
+}
+
+resolve_script_path() {
+  local path="$1"
+  while [ -L "$path" ]; do
+    local dir
+    dir="$(cd -P "$(dirname "$path")" && pwd)"
+    path="$(readlink "$path")"
+    case "$path" in
+      /*) ;;
+      *) path="$dir/$path" ;;
+    esac
+  done
+  local dir
+  dir="$(cd -P "$(dirname "$path")" && pwd)"
+  echo "$dir/$(basename "$path")"
+}
+
+force=0
+auto_yes=0
+target=""
+
+while [ $# -gt 0 ]; do
+  case "$1" in
+    -f|--force)
+      force=1
+      ;;
+    -y)
+      auto_yes=1
+      ;;
+    -h|--help)
+      usage
+      exit 0
+      ;;
+    attach)
+      ;;
+    --)
+      shift
+      break
+      ;;
+    *)
+      if [ -z "$target" ]; then
+        target="$1"
+      else
+        echo "Error: unexpected argument: $1" >&2
+        usage
+        exit 1
+      fi
+      ;;
+  esac
+  shift
+ done
+
+if [ -z "$target" ] && [ $# -gt 0 ]; then
+  target="$1"
+  shift
+fi
+
+if [ -z "$target" ]; then
+  echo "Error: target folder is required." >&2
+  usage
+  exit 1
+fi
+
+if [ ! -d "$target" ]; then
+  echo "Error: target folder not found: $target" >&2
+  exit 1
+fi
+
+SCRIPT_PATH="$(resolve_script_path "$0")"
+SCRIPT_DIR="$(cd -P "$(dirname "$SCRIPT_PATH")" && pwd)"
+REPO_ROOT="$(cd -P "$SCRIPT_DIR/.." && pwd)"
+
+SOURCE_SKILLS="$REPO_ROOT/skills"
+SOURCE_AGENTS="$REPO_ROOT/AGENTS.md"
+
+if [ ! -d "$SOURCE_SKILLS" ] || [ ! -f "$SOURCE_AGENTS" ]; then
+  echo "Error: expected skills or AGENTS.md not found in $REPO_ROOT" >&2
+  exit 1
+fi
+
+TARGET_ROOT="$(cd "$target" && pwd)"
+TARGET_AGENTS="$TARGET_ROOT/AGENTS.md"
+TARGET_CLAUDE="$TARGET_ROOT/.claude"
+TARGET_SKILLS="$TARGET_CLAUDE/skills"
+
+conflicts=()
+if [ -e "$TARGET_AGENTS" ] || [ -L "$TARGET_AGENTS" ]; then
+  conflicts+=("$TARGET_AGENTS")
+fi
+if [ -e "$TARGET_SKILLS" ] || [ -L "$TARGET_SKILLS" ]; then
+  conflicts+=("$TARGET_SKILLS")
+fi
+
+if [ ${#conflicts[@]} -gt 0 ] && [ "$force" -ne 1 ]; then
+  echo "Error: existing paths found. Use --force to replace:" >&2
+  for path in "${conflicts[@]}"; do
+    echo "  $path" >&2
+  done
+  exit 1
+fi
+
+if [ "$auto_yes" -ne 1 ]; then
+  echo "This will create symlinks:"
+  echo "  $TARGET_AGENTS -> $SOURCE_AGENTS"
+  echo "  $TARGET_SKILLS -> $SOURCE_SKILLS"
+  if [ ${#conflicts[@]} -gt 0 ]; then
+    echo "Existing paths will be replaced due to --force."
+  fi
+  printf "Continue? [y/N] "
+  read -r reply
+  case "$reply" in
+    y|Y) ;;
+    *)
+      echo "Aborted."
+      exit 1
+      ;;
+  esac
+fi
+
+if [ ${#conflicts[@]} -gt 0 ]; then
+  rm -rf "$TARGET_AGENTS" "$TARGET_SKILLS"
+fi
+
+mkdir -p "$TARGET_CLAUDE"
+ln -sfn "$SOURCE_AGENTS" "$TARGET_AGENTS"
+ln -sfn "$SOURCE_SKILLS" "$TARGET_SKILLS"
+
+echo "Attached skills to $TARGET_ROOT"
